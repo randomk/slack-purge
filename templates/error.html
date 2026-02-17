@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}Erro - Slack Purge{% endblock %}
+
+{% block content %}
+<nav class="nav">
+    <div class="nav-brand">🧹 Slack Purge <span>by Swap</span></div>
+</nav>
+
+<div style="text-align: center; padding: 4rem 0;">
+    <h1 style="font-size: 3rem; margin-bottom: 1rem;">😬</h1>
+    <h2 style="margin-bottom: 1rem;">Algo deu errado</h2>
+    <p class="text-dim" style="margin-bottom: 2rem;">{{ message }}</p>
+    <a href="/" class="btn btn-primary">← Voltar ao início</a>
+</div>
+{% endblock %}

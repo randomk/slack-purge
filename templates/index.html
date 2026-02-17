@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}Slack Purge - Limpe suas mensagens{% endblock %}
+
+{% block content %}
+<nav class="nav">
+    <div class="nav-brand">🧹 Slack Purge <span>by Swap</span></div>
+    {% if user %}
+    <div class="nav-user">
+        {% if user.avatar %}<img src="{{ user.avatar }}" alt="">{% endif %}
+        <span class="nav-user-name">{{ user.name }}</span>
+        <a href="/dashboard" class="btn btn-sm btn-primary">Dashboard</a>
+    </div>
+    {% endif %}
+</nav>
+
+<div class="hero">
+    <h1>🧹 Slack Purge</h1>
+    <p>
+        Delete suas mensagens do Slack por data, range ou tudo de uma vez.
+        Canais, DMs, threads — tudo silenciosamente.
+    </p>
+
+    <div class="hero-features">
+        <div class="hero-feature">
+            <span class="icon">🔕</span> Silencioso — ninguém é notificado
+        </div>
+        <div class="hero-feature">
+            <span class="icon">🧵</span> Inclui threads
+        </div>
+        <div class="hero-feature">
+            <span class="icon">📅</span> Filtro por data
+        </div>
+    </div>
+
+    <a href="/auth/slack" class="btn btn-slack">
+        <svg width="20" height="20" viewBox="0 0 54 54" fill="none"><path d="M19.7 43.2a4.8 4.8 0 01-4.8 4.8 4.8 4.8 0 01-4.8-4.8 4.8 4.8 0 014.8-4.8h4.8v4.8zm2.4 0a4.8 4.8 0 014.8-4.8 4.8 4.8 0 014.8 4.8v12a4.8 4.8 0 01-4.8 4.8 4.8 4.8 0 01-4.8-4.8v-12z" fill="#E01E5A"/><path d="M26.9 19.7a4.8 4.8 0 01-4.8-4.8 4.8 4.8 0 014.8-4.8 4.8 4.8 0 014.8 4.8v4.8h-4.8zm0 2.5a4.8 4.8 0 014.8 4.8 4.8 4.8 0 01-4.8 4.8h-12a4.8 4.8 0 01-4.8-4.8 4.8 4.8 0 014.8-4.8h12z" fill="#36C5F0"/><path d="M51 27a4.8 4.8 0 01-4.8 4.8 4.8 4.8 0 01-4.8-4.8 4.8 4.8 0 014.8-4.8H51V27zm-2.4 0a4.8 4.8 0 01-4.8 4.8 4.8 4.8 0 01-4.8-4.8V14.9a4.8 4.8 0 014.8-4.8 4.8 4.8 0 014.8 4.8V27z" fill="#2EB67D"/><path d="M38.5 51a4.8 4.8 0 01-4.8 4.8 4.8 4.8 0 01-4.8-4.8 4.8 4.8 0 014.8-4.8h4.8V51zm-2.4 0a4.8 4.8 0 01-4.8 4.8 4.8 4.8 0 01-4.8-4.8V38.5a4.8 4.8 0 014.8-4.8 4.8 4.8 0 014.8 4.8V51z" fill="#ECB22E"/></svg>
+        Autorizar com Slack
+    </a>
+
+    <p class="text-dim text-sm mt-2">
+        Só acessa <strong>suas</strong> mensagens. Nenhum dado é armazenado.
+    </p>
+</div>
+
+<div class="card" style="max-width: 600px; margin: 2rem auto;">
+    <div class="card-title">📋 Como funciona</div>
+    <ol style="padding-left: 1.5rem; color: var(--text-dim); line-height: 2;">
+        <li>Clique em <strong>"Autorizar com Slack"</strong></li>
+        <li>Confirme as permissões no Slack</li>
+        <li>Escolha a data ou range no dashboard</li>
+        <li>Rode um <strong>Dry Run</strong> primeiro (simulação)</li>
+        <li>Confirme para deletar de verdade</li>
+    </ol>
+</div>
+{% endblock %}

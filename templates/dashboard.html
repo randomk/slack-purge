@@ -1,0 +1,312 @@
+{% extends "base.html" %}
+{% block title %}Dashboard - Slack Purge{% endblock %}
+
+{% block content %}
+<nav class="nav">
+    <div class="nav-brand">🧹 Slack Purge <span>by Swap</span></div>
+    <div class="nav-user">
+        {% if user.avatar %}<img src="{{ user.avatar }}" alt="">{% endif %}
+        <span class="nav-user-name">{{ user.name }}</span>
+        <a href="/auth/logout" class="btn btn-sm btn-ghost">Sair</a>
+    </div>
+</nav>
+
+<!-- Config Card -->
+<div class="card" id="config-card">
+    <div class="card-title">⚙️ Configuração</div>
+
+    <!-- Modo -->
+    <div class="form-group">
+        <label>Período</label>
+        <div class="radio-group">
+            <div class="radio-option">
+                <input type="radio" name="mode" id="mode-date" value="date" checked>
+                <label for="mode-date">📅 Dia específico</label>
+            </div>
+            <div class="radio-option">
+                <input type="radio" name="mode" id="mode-range" value="range">
+                <label for="mode-range">📆 Range de datas</label>
+            </div>
+            <div class="radio-option">
+                <input type="radio" name="mode" id="mode-all" value="all">
+                <label for="mode-all">💥 Tudo</label>
+            </div>
+        </div>
+    </div>
+
+    <!-- Date inputs -->
+    <div id="date-fields">
+        <div id="single-date" class="form-group">
+            <label for="date-input">Data</label>
+            <input type="date" id="date-input">
+        </div>
+        <div id="range-dates" class="form-row hidden">
+            <div class="form-group">
+                <label for="start-input">De</label>
+                <input type="date" id="start-input">
+            </div>
+            <div class="form-group">
+                <label for="end-input">Até</label>
+                <input type="date" id="end-input">
+            </div>
+        </div>
+    </div>
+
+    <!-- Actions -->
+    <div class="flex gap-1 mt-2">
+        <button class="btn btn-primary" id="btn-dry-run" onclick="startPurge(true)">
+            🔍 Dry Run (simular)
+        </button>
+        <button class="btn btn-danger" id="btn-purge" onclick="startPurge(false)">
+            🗑️ Deletar de verdade
+        </button>
+    </div>
+    <p class="text-dim text-sm mt-1">
+        Sempre rode um Dry Run primeiro para ver o que será deletado.
+    </p>
+</div>
+
+<!-- Progress Card (hidden initially) -->
+<div class="card hidden" id="progress-card">
+    <div class="flex justify-between items-center mb-2">
+        <div class="card-title" style="margin: 0;">
+            <span id="progress-icon">⏳</span>
+            <span id="progress-title">Executando...</span>
+        </div>
+        <div>
+            <span id="progress-badge" class="badge badge-dry">DRY RUN</span>
+        </div>
+    </div>
+
+    <p class="text-dim text-sm" id="progress-subtitle">
+        Varrendo: <span id="current-conv">-</span>
+    </p>
+
+    <div class="progress-bar">
+        <div class="progress-bar-fill" id="progress-fill" style="width: 0%"></div>
+    </div>
+
+    <div class="stats">
+        <div class="stat">
+            <div class="stat-value blue" id="stat-found">0</div>
+            <div class="stat-label">Encontradas</div>
+        </div>
+        <div class="stat">
+            <div class="stat-value green" id="stat-deleted">0</div>
+            <div class="stat-label" id="stat-deleted-label">Deletadas</div>
+        </div>
+        <div class="stat">
+            <div class="stat-value red" id="stat-errors">0</div>
+            <div class="stat-label">Erros</div>
+        </div>
+    </div>
+
+    <!-- Log -->
+    <div class="flex justify-between items-center mb-2" style="margin-top: 1rem;">
+        <label style="margin: 0;">Log</label>
+        <button class="btn btn-sm btn-ghost" onclick="toggleAutoScroll()">
+            Auto-scroll: <span id="autoscroll-label">ON</span>
+        </button>
+    </div>
+    <div class="log-container" id="log-container"></div>
+
+    <!-- Post-completion actions -->
+    <div class="hidden mt-2" id="completion-actions">
+        <div class="flex gap-1">
+            <button class="btn btn-primary" onclick="resetUI()">🔄 Nova execução</button>
+            <button class="btn btn-danger hidden" id="btn-confirm-purge" onclick="startPurge(false)">
+                🗑️ Agora deletar de verdade
+            </button>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let currentJobId = null;
+let pollInterval = null;
+let autoScroll = true;
+let lastMode = null;
+
+// ─── Mode switching ───
+
+document.querySelectorAll('input[name="mode"]').forEach(radio => {
+    radio.addEventListener('change', (e) => {
+        const mode = e.target.value;
+        document.getElementById('single-date').classList.toggle('hidden', mode !== 'date');
+        document.getElementById('range-dates').classList.toggle('hidden', mode !== 'range');
+        document.getElementById('date-fields').classList.toggle('hidden', mode === 'all');
+    });
+});
+
+// ─── Start purge ───
+
+async function startPurge(dryRun) {
+    const mode = document.querySelector('input[name="mode"]:checked').value;
+    lastMode = { mode, dryRun };
+
+    const payload = { mode, dry_run: dryRun };
+
+    if (mode === 'date') {
+        const date = document.getElementById('date-input').value;
+        if (!date) return alert('Selecione uma data');
+        payload.date = date;
+    } else if (mode === 'range') {
+        const start = document.getElementById('start-input').value;
+        const end = document.getElementById('end-input').value;
+        if (!start || !end) return alert('Selecione as datas de início e fim');
+        if (start > end) return alert('Data início deve ser antes da data fim');
+        payload.start = start;
+        payload.end = end;
+    }
+
+    if (!dryRun) {
+        const msg = mode === 'all'
+            ? '⚠️ Isso vai DELETAR PERMANENTEMENTE TODAS as suas mensagens!\n\nTem certeza?'
+            : '⚠️ Isso vai DELETAR PERMANENTEMENTE suas mensagens no período selecionado!\n\nTem certeza?';
+        if (!confirm(msg)) return;
+    }
+
+    // Show progress
+    document.getElementById('config-card').classList.add('hidden');
+    document.getElementById('progress-card').classList.remove('hidden');
+    document.getElementById('completion-actions').classList.add('hidden');
+    document.getElementById('log-container').innerHTML = '';
+    document.getElementById('progress-fill').style.width = '0%';
+    document.getElementById('progress-fill').className = 'progress-bar-fill';
+
+    // Badge
+    const badge = document.getElementById('progress-badge');
+    badge.textContent = dryRun ? 'DRY RUN' : 'DELETANDO';
+    badge.className = dryRun ? 'badge badge-dry' : 'badge badge-live';
+
+    document.getElementById('stat-deleted-label').textContent = dryRun ? 'A deletar' : 'Deletadas';
+
+    // Reset stats
+    ['stat-found', 'stat-deleted', 'stat-errors'].forEach(id => {
+        document.getElementById(id).textContent = '0';
+    });
+
+    // Disable buttons
+    document.getElementById('btn-dry-run').disabled = true;
+    document.getElementById('btn-purge').disabled = true;
+
+    try {
+        const resp = await fetch('/api/purge', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
+        const data = await resp.json();
+
+        if (data.error) {
+            alert('Erro: ' + data.error);
+            resetUI();
+            return;
+        }
+
+        currentJobId = data.job_id;
+        startPolling();
+    } catch (err) {
+        alert('Erro de conexão: ' + err.message);
+        resetUI();
+    }
+}
+
+// ─── Polling ───
+
+function startPolling() {
+    pollInterval = setInterval(pollStatus, 1000);
+}
+
+async function pollStatus() {
+    if (!currentJobId) return;
+
+    try {
+        const resp = await fetch(`/api/purge/${currentJobId}?last_log=100`);
+        const data = await resp.json();
+
+        // Progress
+        const pct = data.total_conversations > 0
+            ? Math.round((data.progress / data.total_conversations) * 100)
+            : 0;
+        document.getElementById('progress-fill').style.width = pct + '%';
+        document.getElementById('current-conv').textContent =
+            `${data.current_conversation || '-'} (${data.progress}/${data.total_conversations})`;
+
+        // Stats
+        document.getElementById('stat-found').textContent = data.messages_found;
+        document.getElementById('stat-deleted').textContent = data.messages_deleted;
+        document.getElementById('stat-errors').textContent = data.errors;
+
+        // Log
+        updateLog(data.log);
+
+        // Status
+        if (data.status === 'completed') {
+            clearInterval(pollInterval);
+            document.getElementById('progress-icon').textContent = '✅';
+            document.getElementById('progress-title').textContent = 'Concluído';
+            document.getElementById('progress-badge').textContent = 'FINALIZADO';
+            document.getElementById('progress-badge').className = 'badge badge-done';
+            document.getElementById('progress-fill').style.width = '100%';
+            document.getElementById('completion-actions').classList.remove('hidden');
+
+            if (data.dry_run && data.messages_deleted > 0) {
+                document.getElementById('btn-confirm-purge').classList.remove('hidden');
+            }
+        } else if (data.status === 'error') {
+            clearInterval(pollInterval);
+            document.getElementById('progress-icon').textContent = '❌';
+            document.getElementById('progress-title').textContent = 'Erro';
+            document.getElementById('progress-fill').className = 'progress-bar-fill danger';
+            document.getElementById('completion-actions').classList.remove('hidden');
+        }
+    } catch (err) {
+        console.error('Poll error:', err);
+    }
+}
+
+function updateLog(entries) {
+    const container = document.getElementById('log-container');
+    container.innerHTML = '';
+
+    entries.forEach(entry => {
+        const div = document.createElement('div');
+        div.className = 'log-entry';
+        div.innerHTML = `
+            <span class="log-time">${entry.time}</span>
+            <span class="log-msg">${escapeHtml(entry.message)}</span>
+        `;
+        container.appendChild(div);
+    });
+
+    if (autoScroll) {
+        container.scrollTop = container.scrollHeight;
+    }
+}
+
+// ─── UI helpers ───
+
+function resetUI() {
+    document.getElementById('config-card').classList.remove('hidden');
+    document.getElementById('progress-card').classList.add('hidden');
+    document.getElementById('btn-dry-run').disabled = false;
+    document.getElementById('btn-purge').disabled = false;
+    currentJobId = null;
+    if (pollInterval) clearInterval(pollInterval);
+}
+
+function toggleAutoScroll() {
+    autoScroll = !autoScroll;
+    document.getElementById('autoscroll-label').textContent = autoScroll ? 'ON' : 'OFF';
+}
+
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+</script>
+{% endblock %}

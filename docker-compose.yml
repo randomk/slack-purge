@@ -1,0 +1,13 @@
+services:
+  slack-purge:
+    build: .
+    ports:
+      - "8080:8080"
+    env_file:
+      - .env
+    environment:
+      - PORT=8080
+      - FLASK_DEBUG=true
+    volumes:
+      - .:/app
+    restart: unless-stopped
