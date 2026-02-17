@@ -2,12 +2,17 @@ import os
 import json
 import time
 import threading
+import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError
 from urllib.parse import urlencode, parse_qs, urlparse
 from flask import Flask, redirect, request, render_template, jsonify, session, url_for
 from uuid import uuid4
+
+# Force unbuffered output for Railway logs
+print = lambda *args, **kwargs: __builtins__.print(*args, **kwargs, flush=True)
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", uuid4().hex)
@@ -47,9 +52,10 @@ USER_SCOPES = ",".join([
 
 purge_jobs = {}  # job_id -> { status, progress, total, deleted, errors, log, ... }
 
-RATE_LIMIT_DELETE = 0.05  # 50ms - Slack permite ~50 req/min em tier 3
-RATE_LIMIT_FETCH = 0.02   # 20ms - mais agressivo, retry handles 429
+RATE_LIMIT_DELETE = 0.01  # 10ms - muito agressivo, retry handles 429
+RATE_LIMIT_FETCH = 0.01   # 10ms - muito agressivo
 BATCH_SIZE = 1000         # Mais mensagens por request
+PARALLEL_DELETES = 10     # Deletar 10 mensagens em paralelo
 
 
 # ─── Slack API Helper ────────────────────────────────────────────────────────
@@ -354,29 +360,35 @@ def run_purge(job_id: str, token: str, user_id: str,
                 continue
 
             add_log(job, f"{'🔍' if dry_run else '🗑️'} {ch_name}: {len(messages)} mensagens")
+            print(f"[PURGE] {ch_name}: {len(messages)} mensagens")
             job["messages_found"] += len(messages)
 
-            # Deletar
-            for msg in messages:
+            # Dry run - só conta
+            if dry_run:
+                job["messages_deleted"] += len(messages)
+                add_log(job, f"  👀 {len(messages)} mensagens encontradas (dry run)")
+                continue
+
+            # Deletar em PARALELO para máxima velocidade
+            def delete_msg(msg):
                 ts = msg["ts"]
-                text = (msg.get("text") or "")[:60].replace("\n", " ")
-                msg_time = datetime.fromtimestamp(float(ts)).strftime("%H:%M")
-                thread_tag = " ↩" if msg.get("is_thread_reply") else ""
-
-                if dry_run:
-                    job["messages_deleted"] += 1
-                    add_log(job, f"  👀 [{msg_time}]{thread_tag} {text}")
-                    continue
-
                 result = slack_request("chat.delete", token, {"channel": ch_id, "ts": ts})
-                if result.get("ok"):
-                    job["messages_deleted"] += 1
-                    add_log(job, f"  ✅ [{msg_time}]{thread_tag} {text}")
-                else:
-                    job["errors"] += 1
-                    add_log(job, f"  ❌ {result.get('error', '?')} [{msg_time}] {text}")
+                return (msg, result)
 
-                time.sleep(RATE_LIMIT_DELETE)
+            deleted = 0
+            errors = 0
+            with ThreadPoolExecutor(max_workers=PARALLEL_DELETES) as executor:
+                futures = [executor.submit(delete_msg, msg) for msg in messages]
+                for future in as_completed(futures):
+                    msg, result = future.result()
+                    if result.get("ok"):
+                        deleted += 1
+                    else:
+                        errors += 1
+
+            job["messages_deleted"] += deleted
+            job["errors"] += errors
+            add_log(job, f"  ✅ {deleted} deletadas, ❌ {errors} erros")
 
         # Concluído
         job["status"] = "completed"
