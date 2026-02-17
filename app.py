@@ -47,9 +47,9 @@ USER_SCOPES = ",".join([
 
 purge_jobs = {}  # job_id -> { status, progress, total, deleted, errors, log, ... }
 
-RATE_LIMIT_DELETE = 1.2
-RATE_LIMIT_FETCH = 0.3
-BATCH_SIZE = 200
+RATE_LIMIT_DELETE = 0.05  # 50ms - Slack permite ~50 req/min em tier 3
+RATE_LIMIT_FETCH = 0.02   # 20ms - mais agressivo, retry handles 429
+BATCH_SIZE = 1000         # Mais mensagens por request
 
 
 # ─── Slack API Helper ────────────────────────────────────────────────────────
