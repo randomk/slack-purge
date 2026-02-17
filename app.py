@@ -12,6 +12,18 @@ from uuid import uuid4
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", uuid4().hex)
 
+# Force HTTPS in production (behind Railway's load balancer)
+class ReverseProxied:
+    def __init__(self, app):
+        self.app = app
+    def __call__(self, environ, start_response):
+        scheme = environ.get('HTTP_X_FORWARDED_PROTO', 'http')
+        if scheme:
+            environ['wsgi.url_scheme'] = scheme
+        return self.app(environ, start_response)
+
+app.wsgi_app = ReverseProxied(app.wsgi_app)
+
 # ─── Slack Config ─────────────────────────────────────────────────────────────
 
 SLACK_CLIENT_ID = os.environ.get("SLACK_CLIENT_ID", "")
