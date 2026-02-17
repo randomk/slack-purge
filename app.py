@@ -345,46 +345,52 @@ def run_purge(job_id: str, token: str, user_id: str,
 
         job["total_conversations"] = len(conversations)
         add_log(job, f"📋 {len(conversations)} conversas para varrer")
+        print(f"[PURGE] {len(conversations)} conversas para processar")
 
-        # 2. Varrer cada conversa
-        for i, conv in enumerate(conversations):
+        # 2. Varrer conversas em PARALELO (5 ao mesmo tempo)
+        def process_conversation(conv):
             ch_id = conv["id"]
             ch_name = conv["name"]
-            job["progress"] = i + 1
+            messages = fetch_user_messages_api(token, ch_id, user_id, oldest, latest)
+            return (conv, messages)
+
+        all_results = []
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            futures = {executor.submit(process_conversation, c): c for c in conversations}
+            for i, future in enumerate(as_completed(futures)):
+                job["progress"] = i + 1
+                conv, messages = future.result()
+                if messages:
+                    all_results.append((conv, messages))
+                    job["messages_found"] += len(messages)
+                    print(f"[FETCH] {conv['name']}: {len(messages)} msgs")
+
+        add_log(job, f"📊 Total: {job['messages_found']} mensagens em {len(all_results)} conversas")
+
+        # 3. Processar resultados
+        for conv, messages in all_results:
+            ch_id = conv["id"]
+            ch_name = conv["name"]
             job["current_conversation"] = ch_name
 
-            # Buscar mensagens do usuário
-            messages = fetch_user_messages_api(token, ch_id, user_id, oldest, latest)
-
-            if not messages:
-                continue
-
             add_log(job, f"{'🔍' if dry_run else '🗑️'} {ch_name}: {len(messages)} mensagens")
-            print(f"[PURGE] {ch_name}: {len(messages)} mensagens")
-            job["messages_found"] += len(messages)
 
-            # Dry run - só conta
             if dry_run:
                 job["messages_deleted"] += len(messages)
-                add_log(job, f"  👀 {len(messages)} mensagens encontradas (dry run)")
                 continue
 
-            # Deletar em PARALELO para máxima velocidade
-            def delete_msg(msg):
+            # Deletar em PARALELO
+            def delete_msg(msg, channel=ch_id):
                 ts = msg["ts"]
-                result = slack_request("chat.delete", token, {"channel": ch_id, "ts": ts})
-                return (msg, result)
+                result = slack_request("chat.delete", token, {"channel": channel, "ts": ts})
+                return result.get("ok", False)
 
             deleted = 0
             errors = 0
             with ThreadPoolExecutor(max_workers=PARALLEL_DELETES) as executor:
-                futures = [executor.submit(delete_msg, msg) for msg in messages]
-                for future in as_completed(futures):
-                    msg, result = future.result()
-                    if result.get("ok"):
-                        deleted += 1
-                    else:
-                        errors += 1
+                results = list(executor.map(lambda m: delete_msg(m), messages))
+                deleted = sum(1 for r in results if r)
+                errors = len(results) - deleted
 
             job["messages_deleted"] += deleted
             job["errors"] += errors
