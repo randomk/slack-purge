@@ -82,10 +82,11 @@ USER_SCOPES = ",".join([
 
 purge_jobs = {}  # job_id -> { status, progress, total, deleted, errors, log, ... }
 
-RATE_LIMIT_DELETE = 0.01  # 10ms - muito agressivo, retry handles 429
-RATE_LIMIT_FETCH = 0.01   # 10ms - muito agressivo
-BATCH_SIZE = 1000         # Mais mensagens por request
-PARALLEL_DELETES = 10     # Deletar 10 mensagens em paralelo
+RATE_LIMIT_DELETE = 0      # Zero delay - let retry handle 429
+RATE_LIMIT_FETCH = 0       # Zero delay
+BATCH_SIZE = 1000          # Mais mensagens por request
+PARALLEL_DELETES = 20      # Deletar 20 mensagens em paralelo
+PARALLEL_FETCH = 30        # Buscar 30 conversas em paralelo
 
 
 # ─── Slack API Helper ────────────────────────────────────────────────────────
@@ -382,7 +383,7 @@ def run_purge(job_id: str, token: str, user_id: str,
         add_log(job, f"📋 {len(conversations)} conversas para varrer")
         print(f"[PURGE] {len(conversations)} conversas para processar")
 
-        # 2. Varrer conversas em PARALELO (5 ao mesmo tempo)
+        # 2. Varrer conversas em PARALELO (30 ao mesmo tempo!)
         def process_conversation(conv):
             ch_id = conv["id"]
             ch_name = conv["name"]
@@ -390,7 +391,7 @@ def run_purge(job_id: str, token: str, user_id: str,
             return (conv, messages)
 
         all_results = []
-        with ThreadPoolExecutor(max_workers=5) as executor:
+        with ThreadPoolExecutor(max_workers=PARALLEL_FETCH) as executor:
             futures = {executor.submit(process_conversation, c): c for c in conversations}
             for i, future in enumerate(as_completed(futures)):
                 job["progress"] = i + 1
