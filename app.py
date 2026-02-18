@@ -12,7 +12,11 @@ from flask import Flask, redirect, request, render_template, jsonify, session, u
 from uuid import uuid4
 
 # Force unbuffered output for Railway logs
-print = lambda *args, **kwargs: __builtins__.print(*args, **kwargs, flush=True)
+import builtins
+_print = builtins.print
+def print(*args, **kwargs):
+    kwargs['flush'] = True
+    _print(*args, **kwargs)
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", uuid4().hex)
