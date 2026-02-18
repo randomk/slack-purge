@@ -29,6 +29,32 @@ class ReverseProxied:
 
 app.wsgi_app = ReverseProxied(app.wsgi_app)
 
+# ─── Basic Auth ───────────────────────────────────────────────────────────────
+
+BASIC_AUTH_USER = os.environ.get("BASIC_AUTH_USER", "nuke")
+BASIC_AUTH_PASS = os.environ.get("BASIC_AUTH_PASS", "nuke512!")
+
+def check_auth(username, password):
+    return username == BASIC_AUTH_USER and password == BASIC_AUTH_PASS
+
+def authenticate():
+    from flask import Response
+    return Response(
+        'Acesso negado. Credenciais inválidas.', 401,
+        {'WWW-Authenticate': 'Basic realm="Slack Purge"'}
+    )
+
+def requires_auth(f):
+    from functools import wraps
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        from flask import request as req
+        auth = req.authorization
+        if not auth or not check_auth(auth.username, auth.password):
+            return authenticate()
+        return f(*args, **kwargs)
+    return decorated
+
 # ─── Slack Config ─────────────────────────────────────────────────────────────
 
 SLACK_CLIENT_ID = os.environ.get("SLACK_CLIENT_ID", "")
@@ -101,12 +127,14 @@ def date_to_ts(date_str: str, end_of_day: bool = False) -> str:
 # ─── OAuth Routes ─────────────────────────────────────────────────────────────
 
 @app.route("/")
+@requires_auth
 def index():
     user = session.get("slack_user")
     return render_template("index.html", user=user, client_id=SLACK_CLIENT_ID)
 
 
 @app.route("/auth/slack")
+@requires_auth
 def auth_slack():
     """Inicia o OAuth flow com o Slack."""
     state = uuid4().hex
@@ -194,6 +222,7 @@ def logout():
 # ─── Dashboard ────────────────────────────────────────────────────────────────
 
 @app.route("/dashboard")
+@requires_auth
 def dashboard():
     user = session.get("slack_user")
     if not user:
@@ -204,6 +233,7 @@ def dashboard():
 # ─── API: Listar canais ──────────────────────────────────────────────────────
 
 @app.route("/api/conversations")
+@requires_auth
 def api_conversations():
     token = session.get("slack_token")
     if not token:
@@ -259,6 +289,7 @@ def api_conversations():
 # ─── API: Iniciar Purge ──────────────────────────────────────────────────────
 
 @app.route("/api/purge", methods=["POST"])
+@requires_auth
 def api_purge():
     token = session.get("slack_token")
     user_id = session.get("slack_user_id")
