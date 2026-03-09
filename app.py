@@ -685,6 +685,7 @@ def api_list_jobs():
 
 
 @app.route("/api/purge/<job_id>")
+def api_purge_status(job_id):
     job = purge_jobs.get(job_id)
     if not job:
         return jsonify({"error": "Job não encontrado"}), 404
