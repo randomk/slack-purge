@@ -270,11 +270,23 @@ async function pollBatchStatus() {
             : 0;
         document.getElementById('progress-fill').style.width = pct + '%';
         
-        // Find running job for subtitle
+        // Find running job for subtitle and fetch its logs
         const runningJob = data.jobs.find(j => j.status === 'running');
         if (runningJob) {
             document.getElementById('current-conv').textContent = 
                 `Chunk ${runningJob.label} (${data.completed}/${data.total_jobs} completos)`;
+            
+            // Fetch logs from running job
+            const logResp = await fetch(`/api/purge/${runningJob.job_id}?last_log=50`);
+            const logData = await logResp.json();
+            if (logData.log) {
+                updateLog(logData.log);
+            }
+            // Update subtitle with current conversation
+            if (logData.current_conversation) {
+                document.getElementById('current-conv').textContent = 
+                    `${runningJob.label}: ${logData.current_conversation} (${logData.progress}/${logData.total_conversations})`;
+            }
         } else {
             document.getElementById('current-conv').textContent = 
                 `${data.completed}/${data.total_jobs} chunks completos`;

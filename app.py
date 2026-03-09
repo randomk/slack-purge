@@ -494,25 +494,32 @@ def run_purge_internal(job_id: str, token: str, user_id: str,
             return (conv, messages)
 
         all_results = []
+        add_log(job, f"🔍 Varrendo {len(conversations)} conversas...")
         with ThreadPoolExecutor(max_workers=PARALLEL_FETCH) as executor:
             futures = {executor.submit(process_conversation, c): c for c in conversations}
             for i, future in enumerate(as_completed(futures)):
                 job["progress"] = i + 1
                 conv, messages = future.result()
+                job["current_conversation"] = conv["name"]
                 if messages:
                     all_results.append((conv, messages))
                     job["messages_found"] += len(messages)
+                    add_log(job, f"📥 {conv['name']}: {len(messages)} mensagens")
                     print(f"[FETCH {job_id}] {conv['name']}: {len(messages)} msgs")
+                # Log progresso a cada 10 conversas
+                if (i + 1) % 10 == 0:
+                    add_log(job, f"⏳ Progresso: {i + 1}/{len(conversations)} conversas varridas")
 
         add_log(job, f"📊 Total: {job['messages_found']} mensagens em {len(all_results)} conversas")
 
         # 3. Processar resultados
-        for conv, messages in all_results:
+        total_convs = len(all_results)
+        for idx, (conv, messages) in enumerate(all_results):
             ch_id = conv["id"]
             ch_name = conv["name"]
             job["current_conversation"] = ch_name
 
-            add_log(job, f"{'🔍' if dry_run else '🗑️'} {ch_name}: {len(messages)} mensagens")
+            add_log(job, f"{'🔍' if dry_run else '🗑️'} [{idx+1}/{total_convs}] {ch_name}: {len(messages)} mensagens")
 
             if dry_run:
                 job["messages_deleted"] += len(messages)
@@ -526,6 +533,7 @@ def run_purge_internal(job_id: str, token: str, user_id: str,
 
             deleted = 0
             errors = 0
+            batch_count = 0
             with ThreadPoolExecutor(max_workers=PARALLEL_DELETES) as executor:
                 results = list(executor.map(lambda m: delete_msg(m), messages))
                 deleted = sum(1 for r in results if r)
@@ -533,7 +541,7 @@ def run_purge_internal(job_id: str, token: str, user_id: str,
 
             job["messages_deleted"] += deleted
             job["errors"] += errors
-            add_log(job, f"  ✅ {deleted} deletadas, ❌ {errors} erros")
+            add_log(job, f"  ✅ {deleted} deletadas, ❌ {errors} erros (total: {job['messages_deleted']})")
 
         # Concluído
         job["status"] = "completed"
