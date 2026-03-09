@@ -129,6 +129,39 @@ def date_to_ts(date_str: str, end_of_day: bool = False) -> str:
     return str(dt.timestamp())
 
 
+def split_date_range_monthly(start_str: str, end_str: str) -> list:
+    """Divide um range de datas em chunks mensais."""
+    start = datetime.strptime(start_str, "%Y-%m-%d")
+    end = datetime.strptime(end_str, "%Y-%m-%d")
+    
+    chunks = []
+    current = start
+    
+    while current <= end:
+        # Fim do mês atual
+        if current.month == 12:
+            month_end = datetime(current.year + 1, 1, 1) - timedelta(days=1)
+        else:
+            month_end = datetime(current.year, current.month + 1, 1) - timedelta(days=1)
+        
+        # Não passar do end
+        chunk_end = min(month_end, end)
+        
+        chunks.append({
+            "start": current.strftime("%Y-%m-%d"),
+            "end": chunk_end.strftime("%Y-%m-%d"),
+            "label": current.strftime("%b/%Y")
+        })
+        
+        # Próximo mês
+        if current.month == 12:
+            current = datetime(current.year + 1, 1, 1)
+        else:
+            current = datetime(current.year, current.month + 1, 1)
+    
+    return chunks
+
+
 # ─── OAuth Routes ─────────────────────────────────────────────────────────────
 
 @app.route("/")
@@ -308,8 +341,50 @@ def api_purge():
     end_val = data.get("end")
     dry_run = data.get("dry_run", True)
     channels = data.get("channels", [])  # lista de channel IDs, vazio = todos
+    chunk_monthly = data.get("chunk_monthly", True)  # dividir em chunks mensais
 
-    # Validar datas
+    # Para range com chunk_monthly, criar múltiplos jobs
+    if mode == "range" and start_val and end_val and chunk_monthly:
+        chunks = split_date_range_monthly(start_val, end_val)
+        
+        # Se tem mais de 1 mês, criar batch de jobs
+        if len(chunks) > 1:
+            batch_id = uuid4().hex[:8]
+            job_ids = []
+            
+            for chunk in chunks:
+                job_id = f"{batch_id}-{chunk['label'].replace('/', '-')}"
+                oldest = date_to_ts(chunk["start"])
+                latest = date_to_ts(chunk["end"], end_of_day=True)
+                
+                purge_jobs[job_id] = {
+                    "status": "pending",
+                    "progress": 0,
+                    "total_conversations": 0,
+                    "current_conversation": "",
+                    "messages_found": 0,
+                    "messages_deleted": 0,
+                    "errors": 0,
+                    "dry_run": dry_run,
+                    "log": [],
+                    "started_at": None,
+                    "label": chunk["label"],
+                    "batch_id": batch_id,
+                    "chunk": chunk,
+                }
+                job_ids.append(job_id)
+            
+            # Rodar jobs em sequência (um de cada vez para não estourar rate limit)
+            thread = threading.Thread(
+                target=run_batch_purge,
+                args=(job_ids, token, user_id, dry_run, channels),
+                daemon=True,
+            )
+            thread.start()
+            
+            return jsonify({"batch_id": batch_id, "job_ids": job_ids, "chunks": len(chunks)})
+
+    # Job único (date, range pequeno, ou all)
     oldest, latest = None, None
     if mode == "date" and date_val:
         oldest = date_to_ts(date_val)
@@ -346,8 +421,36 @@ def api_purge():
     return jsonify({"job_id": job_id})
 
 
+def run_batch_purge(job_ids: list, token: str, user_id: str, dry_run: bool, filter_channels: list):
+    """Executa múltiplos jobs em sequência."""
+    for job_id in job_ids:
+        job = purge_jobs.get(job_id)
+        if not job:
+            continue
+        
+        chunk = job.get("chunk", {})
+        oldest = date_to_ts(chunk["start"])
+        latest = date_to_ts(chunk["end"], end_of_day=True)
+        
+        job["status"] = "running"
+        job["started_at"] = datetime.now().isoformat()
+        add_log(job, f"🚀 Iniciando chunk {job.get('label', '')}...")
+        
+        # Reutiliza a lógica do run_purge
+        run_purge_internal(job_id, token, user_id, oldest, latest, dry_run, filter_channels)
+        
+        # Pequena pausa entre chunks para não estressar o rate limit
+        time.sleep(2)
+
+
 def run_purge(job_id: str, token: str, user_id: str,
               oldest: str, latest: str, dry_run: bool, filter_channels: list):
+    """Executa o purge em background (wrapper)."""
+    run_purge_internal(job_id, token, user_id, oldest, latest, dry_run, filter_channels)
+
+
+def run_purge_internal(job_id: str, token: str, user_id: str,
+                       oldest: str, latest: str, dry_run: bool, filter_channels: list):
     """Executa o purge em background."""
     job = purge_jobs[job_id]
 
@@ -381,7 +484,7 @@ def run_purge(job_id: str, token: str, user_id: str,
 
         job["total_conversations"] = len(conversations)
         add_log(job, f"📋 {len(conversations)} conversas para varrer")
-        print(f"[PURGE] {len(conversations)} conversas para processar")
+        print(f"[PURGE {job_id}] {len(conversations)} conversas para processar")
 
         # 2. Varrer conversas em PARALELO (30 ao mesmo tempo!)
         def process_conversation(conv):
@@ -399,7 +502,7 @@ def run_purge(job_id: str, token: str, user_id: str,
                 if messages:
                     all_results.append((conv, messages))
                     job["messages_found"] += len(messages)
-                    print(f"[FETCH] {conv['name']}: {len(messages)} msgs")
+                    print(f"[FETCH {job_id}] {conv['name']}: {len(messages)} msgs")
 
         add_log(job, f"📊 Total: {job['messages_found']} mensagens em {len(all_results)} conversas")
 
@@ -562,7 +665,62 @@ def api_purge_status(job_id):
         "messages_deleted": job["messages_deleted"],
         "errors": job["errors"],
         "dry_run": job["dry_run"],
+        "label": job.get("label", ""),
         "log": job["log"][-last_n:],
+    })
+
+
+@app.route("/api/batch/<batch_id>")
+def api_batch_status(batch_id):
+    """Retorna status de todos os jobs de um batch."""
+    batch_jobs = {k: v for k, v in purge_jobs.items() if v.get("batch_id") == batch_id}
+    
+    if not batch_jobs:
+        return jsonify({"error": "Batch não encontrado"}), 404
+    
+    # Agregar estatísticas
+    total_found = sum(j["messages_found"] for j in batch_jobs.values())
+    total_deleted = sum(j["messages_deleted"] for j in batch_jobs.values())
+    total_errors = sum(j["errors"] for j in batch_jobs.values())
+    
+    completed = sum(1 for j in batch_jobs.values() if j["status"] == "completed")
+    running = sum(1 for j in batch_jobs.values() if j["status"] == "running")
+    pending = sum(1 for j in batch_jobs.values() if j["status"] == "pending")
+    errors = sum(1 for j in batch_jobs.values() if j["status"] == "error")
+    
+    # Status geral do batch
+    if errors > 0 and running == 0 and pending == 0:
+        batch_status = "error"
+    elif completed == len(batch_jobs):
+        batch_status = "completed"
+    elif running > 0:
+        batch_status = "running"
+    else:
+        batch_status = "pending"
+    
+    jobs_summary = []
+    for job_id, job in sorted(batch_jobs.items()):
+        jobs_summary.append({
+            "job_id": job_id,
+            "label": job.get("label", ""),
+            "status": job["status"],
+            "messages_found": job["messages_found"],
+            "messages_deleted": job["messages_deleted"],
+            "errors": job["errors"],
+        })
+    
+    return jsonify({
+        "batch_id": batch_id,
+        "status": batch_status,
+        "total_jobs": len(batch_jobs),
+        "completed": completed,
+        "running": running,
+        "pending": pending,
+        "error_jobs": errors,
+        "total_messages_found": total_found,
+        "total_messages_deleted": total_deleted,
+        "total_errors": total_errors,
+        "jobs": jobs_summary,
     })
 
 

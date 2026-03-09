@@ -86,6 +86,12 @@
         <div class="progress-bar-fill" id="progress-fill" style="width: 0%"></div>
     </div>
 
+    <!-- Batch jobs list (for multi-month) -->
+    <div class="hidden" id="batch-jobs" style="margin-top: 1rem;">
+        <label>Chunks mensais:</label>
+        <div id="batch-jobs-list" style="display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.5rem;"></div>
+    </div>
+
     <div class="stats">
         <div class="stat">
             <div class="stat-value blue" id="stat-found">0</div>
@@ -125,6 +131,7 @@
 {% block scripts %}
 <script>
 let currentJobId = null;
+let currentBatchId = null;
 let pollInterval = null;
 let autoScroll = true;
 let lastMode = null;
@@ -206,8 +213,19 @@ async function startPurge(dryRun) {
             return;
         }
 
-        currentJobId = data.job_id;
-        startPolling();
+        // Check if batch or single job
+        if (data.batch_id) {
+            currentBatchId = data.batch_id;
+            currentJobId = null;
+            document.getElementById('batch-jobs').classList.remove('hidden');
+            document.getElementById('progress-title').textContent = `Processando ${data.chunks} meses...`;
+            startBatchPolling();
+        } else {
+            currentJobId = data.job_id;
+            currentBatchId = null;
+            document.getElementById('batch-jobs').classList.add('hidden');
+            startPolling();
+        }
     } catch (err) {
         alert('Erro de conexão: ' + err.message);
         resetUI();
@@ -218,6 +236,74 @@ async function startPurge(dryRun) {
 
 function startPolling() {
     pollInterval = setInterval(pollStatus, 1000);
+}
+
+function startBatchPolling() {
+    pollInterval = setInterval(pollBatchStatus, 1000);
+}
+
+async function pollBatchStatus() {
+    if (!currentBatchId) return;
+
+    try {
+        const resp = await fetch(`/api/batch/${currentBatchId}`);
+        const data = await resp.json();
+
+        // Update jobs list
+        const jobsList = document.getElementById('batch-jobs-list');
+        jobsList.innerHTML = data.jobs.map(job => {
+            let statusIcon = '⏳';
+            let bgColor = '#444';
+            if (job.status === 'completed') { statusIcon = '✅'; bgColor = '#2d5a2d'; }
+            else if (job.status === 'running') { statusIcon = '🔄'; bgColor = '#4a4a00'; }
+            else if (job.status === 'error') { statusIcon = '❌'; bgColor = '#5a2d2d'; }
+            else if (job.status === 'pending') { statusIcon = '⏸️'; bgColor = '#333'; }
+            
+            return `<div style="background: ${bgColor}; padding: 0.3rem 0.6rem; border-radius: 4px; font-size: 0.85rem;">
+                ${statusIcon} ${job.label} <span style="opacity: 0.7">(${job.messages_deleted})</span>
+            </div>`;
+        }).join('');
+
+        // Progress
+        const pct = data.total_jobs > 0
+            ? Math.round((data.completed / data.total_jobs) * 100)
+            : 0;
+        document.getElementById('progress-fill').style.width = pct + '%';
+        
+        // Find running job for subtitle
+        const runningJob = data.jobs.find(j => j.status === 'running');
+        if (runningJob) {
+            document.getElementById('current-conv').textContent = 
+                `Chunk ${runningJob.label} (${data.completed}/${data.total_jobs} completos)`;
+        } else {
+            document.getElementById('current-conv').textContent = 
+                `${data.completed}/${data.total_jobs} chunks completos`;
+        }
+
+        // Stats
+        document.getElementById('stat-found').textContent = data.total_messages_found;
+        document.getElementById('stat-deleted').textContent = data.total_messages_deleted;
+        document.getElementById('stat-errors').textContent = data.total_errors;
+
+        // Status
+        if (data.status === 'completed') {
+            clearInterval(pollInterval);
+            document.getElementById('progress-icon').textContent = '✅';
+            document.getElementById('progress-title').textContent = 'Todos os chunks concluídos!';
+            document.getElementById('progress-badge').textContent = 'FINALIZADO';
+            document.getElementById('progress-badge').className = 'badge badge-done';
+            document.getElementById('progress-fill').style.width = '100%';
+            document.getElementById('completion-actions').classList.remove('hidden');
+        } else if (data.status === 'error') {
+            clearInterval(pollInterval);
+            document.getElementById('progress-icon').textContent = '⚠️';
+            document.getElementById('progress-title').textContent = 'Alguns chunks com erro';
+            document.getElementById('progress-fill').className = 'progress-bar-fill danger';
+            document.getElementById('completion-actions').classList.remove('hidden');
+        }
+    } catch (err) {
+        console.error('Batch poll error:', err);
+    }
 }
 
 async function pollStatus() {
@@ -292,9 +378,14 @@ function updateLog(entries) {
 function resetUI() {
     document.getElementById('config-card').classList.remove('hidden');
     document.getElementById('progress-card').classList.add('hidden');
+    document.getElementById('batch-jobs').classList.add('hidden');
+    document.getElementById('batch-jobs-list').innerHTML = '';
     document.getElementById('btn-dry-run').disabled = false;
     document.getElementById('btn-purge').disabled = false;
+    document.getElementById('progress-icon').textContent = '⏳';
+    document.getElementById('progress-title').textContent = 'Executando...';
     currentJobId = null;
+    currentBatchId = null;
     if (pollInterval) clearInterval(pollInterval);
 }
 
