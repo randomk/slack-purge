@@ -11,6 +11,17 @@
     </div>
 </nav>
 
+<!-- Active Jobs Banner (hidden initially) -->
+<div class="card hidden" id="active-jobs-card" style="background: #2d4a2d; border: 1px solid #4a7a4a;">
+    <div class="flex justify-between items-center">
+        <div>
+            <strong>🔄 Jobs ativos encontrados!</strong>
+            <p class="text-dim text-sm" id="active-jobs-info">Você tem jobs rodando.</p>
+        </div>
+        <button class="btn btn-primary" onclick="reconnectToJob()">Reconectar</button>
+    </div>
+</div>
+
 <!-- Config Card -->
 <div class="card" id="config-card">
     <div class="card-title">⚙️ Configuração</div>
@@ -135,6 +146,77 @@ let currentBatchId = null;
 let pollInterval = null;
 let autoScroll = true;
 let lastMode = null;
+let activeJobs = [];
+
+// ─── Check for active jobs on page load ───
+
+document.addEventListener('DOMContentLoaded', checkActiveJobs);
+
+async function checkActiveJobs() {
+    try {
+        const resp = await fetch('/api/jobs');
+        const data = await resp.json();
+        
+        // Filter running or pending jobs
+        activeJobs = data.jobs.filter(j => j.status === 'running' || j.status === 'pending');
+        
+        if (activeJobs.length > 0) {
+            const totalMsgs = activeJobs.reduce((sum, j) => sum + j.messages_deleted, 0);
+            document.getElementById('active-jobs-info').textContent = 
+                `${activeJobs.length} job(s) em execução. ${totalMsgs} mensagens deletadas até agora.`;
+            document.getElementById('active-jobs-card').classList.remove('hidden');
+        }
+        
+        // Also check localStorage for last job
+        const savedJobId = localStorage.getItem('slack_purge_job_id');
+        const savedBatchId = localStorage.getItem('slack_purge_batch_id');
+        if (savedBatchId && activeJobs.some(j => j.batch_id === savedBatchId)) {
+            // Auto-reconnect to batch
+            currentBatchId = savedBatchId;
+            showProgressCard(true);
+            startBatchPolling();
+        } else if (savedJobId && activeJobs.some(j => j.job_id === savedJobId)) {
+            // Auto-reconnect to job
+            currentJobId = savedJobId;
+            showProgressCard(false);
+            startPolling();
+        }
+    } catch (err) {
+        console.error('Error checking active jobs:', err);
+    }
+}
+
+function reconnectToJob() {
+    if (activeJobs.length === 0) return;
+    
+    // Find the most recent running job
+    const runningJob = activeJobs.find(j => j.status === 'running') || activeJobs[0];
+    
+    if (runningJob.batch_id) {
+        currentBatchId = runningJob.batch_id;
+        currentJobId = null;
+        localStorage.setItem('slack_purge_batch_id', currentBatchId);
+        showProgressCard(true);
+        startBatchPolling();
+    } else {
+        currentJobId = runningJob.job_id;
+        currentBatchId = null;
+        localStorage.setItem('slack_purge_job_id', currentJobId);
+        showProgressCard(false);
+        startPolling();
+    }
+    
+    document.getElementById('active-jobs-card').classList.add('hidden');
+}
+
+function showProgressCard(isBatch) {
+    document.getElementById('config-card').classList.add('hidden');
+    document.getElementById('progress-card').classList.remove('hidden');
+    document.getElementById('completion-actions').classList.add('hidden');
+    document.getElementById('batch-jobs').classList.toggle('hidden', !isBatch);
+    document.getElementById('btn-dry-run').disabled = true;
+    document.getElementById('btn-purge').disabled = true;
+}
 
 // ─── Mode switching ───
 
@@ -217,12 +299,16 @@ async function startPurge(dryRun) {
         if (data.batch_id) {
             currentBatchId = data.batch_id;
             currentJobId = null;
+            localStorage.setItem('slack_purge_batch_id', currentBatchId);
+            localStorage.removeItem('slack_purge_job_id');
             document.getElementById('batch-jobs').classList.remove('hidden');
             document.getElementById('progress-title').textContent = `Processando ${data.chunks} meses...`;
             startBatchPolling();
         } else {
             currentJobId = data.job_id;
             currentBatchId = null;
+            localStorage.setItem('slack_purge_job_id', currentJobId);
+            localStorage.removeItem('slack_purge_batch_id');
             document.getElementById('batch-jobs').classList.add('hidden');
             startPolling();
         }
@@ -396,8 +482,11 @@ function resetUI() {
     document.getElementById('btn-purge').disabled = false;
     document.getElementById('progress-icon').textContent = '⏳';
     document.getElementById('progress-title').textContent = 'Executando...';
+    document.getElementById('active-jobs-card').classList.add('hidden');
     currentJobId = null;
     currentBatchId = null;
+    localStorage.removeItem('slack_purge_job_id');
+    localStorage.removeItem('slack_purge_batch_id');
     if (pollInterval) clearInterval(pollInterval);
 }
 

@@ -656,8 +656,35 @@ def add_log(job: dict, message: str):
 
 # ─── API: Status do job ──────────────────────────────────────────────────────
 
+@app.route("/api/jobs")
+@requires_auth
+def api_list_jobs():
+    """Lista todos os jobs (para reconectar após refresh)."""
+    user_id = session.get("slack_user_id", "")
+    
+    jobs_list = []
+    for job_id, job in purge_jobs.items():
+        jobs_list.append({
+            "job_id": job_id,
+            "status": job["status"],
+            "label": job.get("label", ""),
+            "batch_id": job.get("batch_id", ""),
+            "messages_found": job["messages_found"],
+            "messages_deleted": job["messages_deleted"],
+            "errors": job["errors"],
+            "dry_run": job["dry_run"],
+            "started_at": job.get("started_at", ""),
+            "progress": job["progress"],
+            "total_conversations": job["total_conversations"],
+        })
+    
+    # Ordenar por mais recente primeiro
+    jobs_list.sort(key=lambda x: x.get("started_at") or "", reverse=True)
+    
+    return jsonify({"jobs": jobs_list})
+
+
 @app.route("/api/purge/<job_id>")
-def api_purge_status(job_id):
     job = purge_jobs.get(job_id)
     if not job:
         return jsonify({"error": "Job não encontrado"}), 404
